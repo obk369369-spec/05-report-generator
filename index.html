@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>WIC 5번 도구 - 보고서 생성기</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 16px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 8px;
+    }
+    .section-title {
+      font-weight: 600;
+      margin-top: 16px;
+      margin-bottom: 4px;
+      font-size: 15px;
+    }
+    #status {
+      padding: 8px;
+      border-radius: 6px;
+      background: #f3f4f6;
+      margin-top: 8px;
+      font-size: 13px;
+      white-space: pre-line;
+    }
+    #controls {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    button {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      background: #e5e7eb;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover {
+      background: #d1d5db;
+    }
+    input[type="file"] {
+      font-size: 13px;
+    }
+    #tableContainer {
+      margin-top: 12px;
+      max-height: 220px;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 4px;
+      font-size: 12px;
+      background: #fafafa;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid #e5e7eb;
+      padding: 4px 6px;
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+    th {
+      background: #f3f4f6;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    #reportContainer {
+      margin-top: 16px;
+    }
+    #reportText {
+      width: 100%;
+      height: 260px;
+      font-size: 12px;
+      font-family: "Consolas", "Courier New", monospace;
+      padding: 8px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      resize: vertical;
+      white-space: pre;
+    }
+    .small {
+      font-size: 11px;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <h1>WIC 5번 도구 · 보고서 생성기 (4번 도구 출력용)</h1>
+  <div class="small">
+    4번 도구에서 만든 엑셀 파일(예: <code>4번도구_최신출력_고객장부기반.xlsx</code>)을 업로드하면<br/>
+    고객별 자동 요약 보고서를 생성하고 TXT 파일로 다운로드할 수 있습니다.
+  </div>
+
+  <div id="controls">
+    <div>
+      <span class="section-title">① 엑셀 파일 선택</span><br/>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+    </div>
+    <div>
+      <span class="section-title">② 처리 / 보고서 생성</span><br/>
+      <button id="btnGenerate" disabled>보고서 자동 생성</button>
+      <button id="btnDownload" disabled>TXT로 다운로드</button>
+    </div>
+  </div>
+
+  <div id="status">상태: 아직 파일이 없습니다.</div>
+
+  <div class="section-title">엑셀 미리보기 (상위 행)</div>
+  <div id="tableContainer"></div>
+
+  <div id="reportContainer">
+    <div class="section-title">자동 생성된 보고서 (편집 가능 텍스트)</div>
+    <textarea id="reportText" placeholder="보고서가 여기에 생성됩니다."></textarea>
+  </div>
+
+  <script>
+    let rawRows = [];
+    let normalizedRows = [];
+    let reportText = "";
+
+    const statusEl = document.getElementById("status");
+    const tableContainer = document.getElementById("tableContainer");
+    const reportTextArea = document.getElementById("reportText");
+    const btnGenerate = document.getElementById("btnGenerate");
+    const btnDownload = document.getElementById("btnDownload");
+    const fileInput = document.getElementById("fileInput");
+
+    function setStatus(msg) {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(" ")[0];
+      statusEl.textContent = "상태 [" + timeStr + "]: " + msg;
+    }
+
+    fileInput.addEventListener("change", function (evt) {
+      const file = evt.target.files[0];
+      if (!file) {
+        setStatus("파일이 선택되지 않았습니다.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+
+        const json = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+        rawRows = json;
+        setStatus("엑셀 데이터 로드 완료 · 총 " + rawRows.length + "행");
+
+        renderPreviewTable(rawRows);
+        btnGenerate.disabled = false;
+        btnDownload.disabled = true;
+        reportTextArea.value = "";
+        normalizedRows = [];
+        reportText = "";
+      };
+      reader.readAsArrayBuffer(file);
+      setStatus("엑셀 파일 읽는 중...");
+    });
+
+    function renderPreviewTable(rows) {
+      if (!rows || rows.length === 0) {
+        tableContainer.innerHTML = "<div class='small'>표시할 데이터가 없습니다.</div>";
+        return;
+      }
+
+      const maxRows = Math.min(20, rows.length);
+      const sample = rows.slice(0, maxRows);
+      const columns = Object.keys(sample[0] || {});
+
+      let html = "<table><thead><tr>";
+      for (const col of columns) {
+        html += "<th>" + escapeHtml(col) + "</th>";
+      }
+      html += "</tr></thead><tbody>";
+
+      for (const row of sample) {
+        html += "<tr>";
+        for (const col of columns) {
+          const val = row[col] == null ? "" : String(row[col]);
+          html += "<td>" + escapeHtml(val) + "</td>";
+        }
+        html += "</tr>";
+      }
+
+      html += "</tbody></table>";
+      tableContainer.innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function normalizeRow(row) {
+      const 기관 = (row["기관"] || "").toString().trim();
+      const 박사명 = (row["박사명"] || "").toString().trim();
+      const 과제명 = (row["과제명"] || "").toString().replace(/\s+/g, " ").trim();
+      const 비고 = (row["비고"] || "").toString().replace(/\s+/g, " ").trim();
+      const 키워드원본 = (row["키워드"] || "").toString().replace(/\s+/g, " ").trim();
+
+      let 연도 = row["연도"];
+      if (typeof 연도 === "number") {
+        연도 = Math.round(연도);
+      } else if (typeof 연도 === "string" && 연도.trim() !== "") {
+        const parsed = parseInt(연도.replace(/[^0-9]/g, ""), 10);
+        연도 = isNaN(parsed) ? "" : parsed;
+      } else {
+        연도 = "";
+      }
+
+      let 연구비 = row["연구비"];
+      if (연구비 == null || 연구비 === "") {
+        연구비 = "";
+      }
+
+      const 카테고리자동 = detectCategory(과제명 + " " + 키워드원본);
+
+      return {
+        기관,
+        박사명,
+        과제명,
+        연도,
+        연구비,
+        카테고리: 카테고리자동,
+        키워드: 키워드원본,
+        비고
+      };
+    }
+
+    function detectCategory(text) {
+      const t = (text || "").toLowerCase();
+
+      if (
+        t.includes("lithium-ion") ||
+        t.includes("lithium ion") ||
+        t.includes("battery") ||
+        t.includes("recycling")
+      ) {
+        return "2차전지/배터리 재활용";
+      }
+
+      if (
+        t.includes("thermoplastic") ||
+        t.includes("polymer") ||
+        t.includes("composite")
+      ) {
+        return "고분자/복합소재";
+      }
+
+      if (
+        t.includes("military") ||
+        t.includes("defense")
+      ) {
+        return "군수/방산 응용";
+      }
+
+      return "기타(수동 검토 필요)";
+    }
+
+    btnGenerate.addEventListener("click", function () {
+      if (!rawRows || rawRows.length === 0) {
+        setStatus("엑셀 데이터가 없습니다. 먼저 파일을 선택해 주세요.");
+        return;
+      }
+
+      setStatus("데이터 정규화 및 카테고리 분류 중...");
+      normalizedRows = rawRows.map(normalizeRow);
+
+      setStatus("정규화 완료 · 보고서 문단 생성 중...");
+      reportText = buildReportText(normalizedRows);
+
+      reportTextArea.value = reportText;
+      btnDownload.disabled = false;
+      setStatus("보고서 생성 완료 · 내용 확인 후 필요시 TXT 다운로드 가능");
+    });
+
+    function buildReportText(rows) {
+      if (!rows || rows.length === 0) {
+        return "데이터가 없습니다.";
+      }
+
+      let lines = [];
+      lines.push("WIC 5번 도구 · 고객 연구비 기반 자동 보고서");
+      lines.push("생성 일시: " + new Date().toLocaleString());
+      lines.push("총 대상 고객 수: " + rows.length);
+      lines.push("");
+      lines.push("────────────────────────────────────");
+      lines.push("");
+
+      rows.forEach(function (row, idx) {
+        const num = idx + 1;
+        lines.push("[" + num + "] 기관: " + (row.기관 || "(미기입)") + " / 연구자: " + (row.박사명 || "(미기입)"));
+
+        let headerLine = "   · 과제명: " + (row.과제명 || "(미기입)");
+        if (row.연도) {
+          headerLine += " (" + row.연도 + "년)";
+        }
+        lines.push(headerLine);
+
+        lines.push("   · 자동 분류 카테고리: " + (row.카테고리 || "기타"));
+
+        if (row.키워드) {
+          lines.push("   · 핵심 키워드: " + row.키워드);
+        }
+
+        if (row.연구비) {
+          lines.push("   · 연구비: " + row.연구비);
+        }
+
+        if (row.비고) {
+          lines.push("   · 비고/진행 상태: " + row.비고);
+        }
+
+        lines.push("   · 요약: " + buildOneLineSummary(row));
+        lines.push("   · 후속 안내: 본 과제와 연관된 추가 시장·기술 자료가 필요하시면 언제든지 연락 주시기 바랍니다.");
+        lines.push("");
+      });
+
+      return lines.join("\n");
+    }
+
+    function buildOneLineSummary(row) {
+      const 기관 = row.기관 || "해당 기관";
+      const 박사명 = row.박사명 || "연구자";
+      const 카테고리 = row.카테고리 || "관련 분야";
+      const 연도 = row.연도 || "해당 연도";
+      let txt =
+        기관 + "의 " + 박사명 + " 고객은 " +
+        연도 + "년 기준으로 '" + 카테고리 +
+        "' 영역에서 시장조사·기술자료 수요가 있는 것으로 판단됩니다.";
+      return txt;
+    }
+
+    btnDownload.addEventListener("click", function () {
+      if (!reportText || reportText.trim() === "") {
+        setStatus("다운로드할 보고서 내용이 없습니다.");
+        return;
+      }
+      const blob = new Blob([reportText], {
+        type: "text/plain;charset=utf-8"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const now = new Date();
+      const stamp = now.toISOString().replace(/[:.]/g, "-");
+      a.href = url;
+      a.download = "WIC_5번도구_보고서_" + stamp + ".txt";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setStatus("TXT 파일 다운로드 완료");
+    });
+  </script>
+</body>
+</html>
